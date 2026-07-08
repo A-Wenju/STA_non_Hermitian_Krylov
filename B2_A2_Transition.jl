@@ -1,41 +1,4 @@
-"""
-B2_A2_Transition
-================
-Module for studying the B2 → A2 phase transition in the PT-symmetric
-Heisenberg spin chain.
 
-Reference: Kattel, Pasnoori & Andrei, J. Phys. A 56, 325001 (2023)
-
-Usage (Jupyter notebook):
-    include("PT_Heisenberg.jl")
-    include("B2_A2_Transition.jl")
-    using .B2_A2_Transition
-
-    scan = scan_B2_to_A2(6, 0.3)
-    print_scan_table(scan)
-    detailed_report(6, -0.70, 0.3)
-
-Phase recap (Tables 1 & 2 of the paper):
-─────────────────────────────────────────────────────────────────────
-  B2  (ξ < -1/2):  No boundary strings. ALL states have real energy.
-                   Ground state: Sz = +1/2 (odd N), Sz = 0 or 1 (even N).
-                   Built from all-spins-up reference state.
-
-  A2  (-1/2 < ξ < 0):  Boundary strings exist → PT-broken sector appears.
-                        BUT the ground state remains in the PT-unbroken
-                        sector with real energy E0 throughout.
-                        Ground state: Sz = +1/2 (odd N), Sz = 0 or 1 (even N).
-
-  Transition at ξ = -1/2:  exceptional point. Boundary strings first
-  appear. E0 is continuous across the transition but the wavefunction
-  structure changes — this makes CD driving across this point non-trivial.
-
-Strategy for CD driving:
-  Fix χ, sweep ξ from B2 → A2 (e.g. -0.8 → -0.1).
-  The instantaneous ground state is real and well-defined throughout.
-  The AGP norm ‖A_ξ‖² will peak sharply near ξ = -1/2, signalling
-  the exceptional point and the associated critical slowing-down.
-"""
 module B2_A2_Transition
 
 using LinearAlgebra
@@ -60,16 +23,6 @@ export build_sz_operator,
 # Sz operator
 # ─────────────────────────────────────────────────────────────────────────────
 
-"""
-    build_sz_operator(N) -> SparseMatrixCSC
-
-Build the total Sz = (1/2) Σ_j σz_j operator as a diagonal sparse matrix
-in the 2^N-dimensional computational basis.
-
-Basis ordering convention (matching PT_Heisenberg):
-  index 0  →  |↑↑...↑⟩  (all up),   Sz = +N/2
-  index 2^N-1  →  |↓↓...↓⟩ (all down), Sz = -N/2
-"""
 function build_sz_operator(N::Int)
     dim  = 2^N
     # For basis index i (0-based), the number of up spins = popcount(i)
@@ -81,20 +34,6 @@ end
 # Sector classification and ground state
 # ─────────────────────────────────────────────────────────────────────────────
 
-"""
-    find_unbroken_ground_state(H; tol=1e-6)
-        -> (E_unbroken, V_unbroken, E_broken)
-
-Diagonalize H and split the spectrum into the PT-unbroken sector
-(|Im(E)| < tol, real eigenvalues) and the PT-broken sector (complex
-eigenvalues). Both are sorted by Re(E).
-
-Returns
--------
-E_unbroken  : Vector{Float64}  — real parts of unbroken eigenvalues, sorted
-V_unbroken  : Matrix{ComplexF64} — corresponding right eigenvectors (columns)
-E_broken    : Vector{ComplexF64} — complex eigenvalues of the broken sector
-"""
 function find_unbroken_ground_state(H::AbstractMatrix; tol::Real=1e-6)
     F            = eigen(Matrix(H))
     idx_unbroken = findall(e -> abs(imag(e)) < tol, F.values)
@@ -108,19 +47,7 @@ function find_unbroken_ground_state(H::AbstractMatrix; tol::Real=1e-6)
     return E_unbroken[perm], V_unbroken[:, perm], E_broken
 end
 
-"""
-    ground_state_sz(H, Sz_op; tol=1e-6) -> (E_gs, ⟨Sz⟩)
 
-Find the PT-unbroken ground state and return its energy and biorthogonal
-expectation value of Sz.
-
-For a non-Hermitian H the correct expectation value is the biorthogonal one:
-    ⟨Sz⟩ = ⟨ψ_L | Sz | ψ_R⟩ / ⟨ψ_L | ψ_R⟩
-where |ψ_R⟩ is the right eigenvector of H and ⟨ψ_L| is the left
-eigenvector (= right eigenvector of H†, conjugate-transposed).
-
-Returns (NaN, NaN) if no real eigenvalue exists within tolerance.
-"""
 function ground_state_sz(H::AbstractMatrix, Sz_op::AbstractMatrix; tol::Real=1e-6)
     FR = eigen(Matrix(H))
     FL = eigen(Matrix(H'))
@@ -148,20 +75,7 @@ end
 # Spectral gaps
 # ─────────────────────────────────────────────────────────────────────────────
 
-"""
-    spectral_gaps(H; tol=1e-6) -> (Δ_unbroken, Δ_to_broken)
 
-Compute two spectral gaps relevant to the AGP norm:
-
-  Δ_unbroken  : E1 - E0 within the PT-unbroken sector (both real).
-                This controls transitions within the real sector.
-
-  Δ_to_broken : Re(E_broken_min) - E0, the gap from the unbroken ground
-                state to the lowest PT-broken (complex) state.
-                Returns Inf in the B phases where no broken states exist.
-
-Both gaps closing near ξ = -1/2 causes the AGP norm to diverge.
-"""
 function spectral_gaps(H::AbstractMatrix; tol::Real=1e-6)
     E_u, _, E_b = find_unbroken_ground_state(H; tol)
 
@@ -175,33 +89,6 @@ end
 # Full scan across B2 → A2
 # ─────────────────────────────────────────────────────────────────────────────
 
-"""
-    scan_B2_to_A2(N, χ; ξ_range=(-0.9, -0.05), n_points=60, tol=1e-6)
-        -> NamedTuple
-
-Sweep ξ from deep in B2 through the exceptional point at ξ = -1/2 into A2,
-recording at each point:
-  - xi           : the ξ value
-  - E0           : ground state energy (PT-unbroken sector)
-  - Sz           : biorthogonal ⟨Sz⟩ of the ground state
-  - n_broken     : number of PT-broken (complex) eigenvalues
-  - gap_unbroken : E1 - E0 within the unbroken sector
-  - gap_to_broken: Re(E_broken_min) - E0  (NaN in B2 where no broken states)
-  - phase        : "B2" or "A2" string label
-
-Parameters
-----------
-N        : chain length
-χ        : fixed imaginary boundary parameter (kept constant during scan)
-ξ_range  : (ξ_start, ξ_end), should straddle -1/2
-n_points : number of ξ values in the scan
-tol      : threshold for |Im(E)| to classify as unbroken
-
-Example
--------
-    scan = scan_B2_to_A2(6, 0.3; ξ_range=(-0.85, -0.05), n_points=40)
-    print_scan_table(scan)
-"""
 function scan_B2_to_A2(N::Int, χ::Real;
                         ξ_range::Tuple{Real,Real}=(-0.9, -0.05),
                         n_points::Int=60,
@@ -246,12 +133,6 @@ end
 # Display utilities
 # ─────────────────────────────────────────────────────────────────────────────
 
-"""
-    print_scan_table(scan)
-
-Pretty-print the NamedTuple returned by scan_B2_to_A2, with a horizontal
-rule marking the B2/A2 transition point.
-"""
 function print_scan_table(scan)
     header = "  ξ        Phase  |  E0               ⟨Sz⟩    n_broken" *
              "  Δ(unbroken)   Δ(→broken)"
@@ -284,13 +165,7 @@ function print_scan_table(scan)
     println()
 end
 
-"""
-    detailed_report(N, ξ, χ; n_show=10, tol=1e-6)
 
-Print a detailed spectrum at a single (ξ, χ) point: all eigenvalues
-labelled by sector (unbroken/broken), the boundary fields, the phase,
-and the biorthogonal ground state ⟨Sz⟩.
-"""
 function detailed_report(N::Int, ξ::Real, χ::Real;
                           n_show::Int=10, tol::Real=1e-6)
     H     = PT_Heisenberg.build_hamiltonian(N, ξ, χ)

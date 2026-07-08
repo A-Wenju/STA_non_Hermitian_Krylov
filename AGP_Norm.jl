@@ -200,12 +200,25 @@ Returns a NamedTuple with fields:
   E                : full eigenvalue vector (for diagnostics)
   phase            : phase label string
 """
-function agp_norm_exact(N::Int, ξ::Real, χ::Real;
-                        param::Symbol   = :xi,
-                        degen_tol::Real = 1e-8)
+# function agp_norm_exact(N::Int, ξ::Real, χ::Real;
+#                         param::Symbol   = :xi,
+#                         degen_tol::Real = 1e-8)
 
-    H  = Matrix(PT_Heisenberg.build_hamiltonian(N, ξ, χ))
-    dH = _get_dH(N, ξ, χ, param)
+#     H  = Matrix(PT_Heisenberg.build_hamiltonian(N, ξ, χ))
+#     dH = _get_dH(N, ξ, χ, param)
+
+  function agp_norm_exact(N::Int, ξ::Real, χ::Real;
+                          param::Symbol        = :xi,
+                          degen_tol::Real      = 1e-8,
+                          n_up::Union{Int,Nothing} = nothing)
+
+      if isnothing(n_up)
+          H  = Matrix(PT_Heisenberg.build_hamiltonian(N, ξ, χ))
+          dH = _get_dH(N, ξ, χ, param)
+      else
+          H  = Matrix(PT_Heisenberg.build_hamiltonian_sector(N, ξ, χ, n_up))
+          dH = _get_dH_sector(N, ξ, χ, param, n_up)
+      end
 
     E, VR, VL = biorthogonal_eigensystem(H)
     dim = length(E)
@@ -352,5 +365,16 @@ function _get_dH(N::Int, ξ::Real, χ::Real, param::Symbol)
         error("param must be :xi or :chi, got :$param")
     end
 end
+
+  function _get_dH_sector(N::Int, ξ::Real, χ::Real,
+                          param::Symbol, n_up::Int)
+      if param == :xi
+          return Matrix(PT_Heisenberg.dH_dxi_sector(N, ξ, χ, n_up))
+      elseif param == :chi
+          return Matrix(PT_Heisenberg.dH_dchi_sector(N, ξ, χ, n_up))
+      else
+          error("param must be :xi or :chi, got :$param")
+      end
+  end
 
 end  # module AGP_Norm

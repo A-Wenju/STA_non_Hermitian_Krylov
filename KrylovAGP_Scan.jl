@@ -1,39 +1,10 @@
-"""
-KrylovAGP_Scan
-==============
-Scans ξ across the B2 → A2 phase transition and computes the AGP
-Frobenius norm squared using the Krylov-Arnoldi algorithm at several
-finite Krylov dimensions, alongside the exact result from full
-diagonalization for benchmarking.
 
-Dependencies (included automatically):
-    PT_Heisenberg.jl    — Hamiltonian, dH/dξ
-    B2_A2_Transition.jl
-    AGP_Norm.jl         — exact AGP norm via biorthogonal eigensystem
-    KrylovKitAGP.jl     — Krylov-Arnoldi AGP
-
-Usage (Jupyter notebook):
-    include("KrylovAGP_Scan.jl")
-    using .KrylovAGP_Scan
-
-    results = scan_krylov_agp_norm(7, 1e-5)
-    print_krylov_scan_table(results)
-
-Notes on convergence
---------------------
-The Krylov AGP at finite dimension k is NOT guaranteed to be a
-variational lower bound on ‖A_exact‖²_F. It can overshoot or undershoot
-depending on ξ and k, because the truncated Hessenberg system does not
-correspond to a projection of the full operator equation. Convergence is
-therefore non-monotone in general; the correct diagnostic is the relative
-error |‖A_k‖² - ‖A_exact‖²| / ‖A_exact‖², which decreases toward zero
-as k → dim(H)².
-"""
 module KrylovAGP_Scan
 
 using LinearAlgebra
 using SparseArrays
 using Printf
+using Base.Threads
 
 # ── Load all dependencies ─────────────────────────────────────────────────────
 include("PT_Heisenberg.jl")
@@ -51,18 +22,7 @@ export scan_krylov_agp_norm, print_krylov_scan_table
 # Single-point: Krylov AGP norm squared for several k_dims
 # ─────────────────────────────────────────────────────────────────────────────
 
-"""
-    krylov_agp_norm_sq(H, dH, k_dims) -> Vector{Float64}
 
-Compute ‖A_k‖²_F from KrylovKit_AGP_finite at each dimension in k_dims.
-Each entry is computed independently by calling KrylovKit_AGP_finite
-with the corresponding target_dim.
-
-Returns a Vector of ‖A_k‖²_F values in the same order as k_dims.
-
-Note: the Krylov norm can exceed the exact value at small k — this is
-expected behaviour of the truncated Hessenberg solve, not a bug.
-"""
 function krylov_agp_norm_sq(H::Matrix{ComplexF64},
                              dH::Matrix{ComplexF64},
                              k_dims::Vector{Int})::Vector{Float64}
@@ -79,64 +39,10 @@ end
 # Main scan
 # ─────────────────────────────────────────────────────────────────────────────
 
-"""
-    scan_krylov_agp_norm(N, χ;
-                         ξ_range     = (-0.9, -0.05),
-                         n_points    = 60,
-                         krylov_dims = [5, 10, 20, 40, 80],
-                         degen_tol   = 1e-8)
-        -> NamedTuple
-
-Sweep ξ across the B2 → A2 transition at fixed χ and compute:
-  • The exact AGP Frobenius norm squared (full diagonalization)
-  • The Krylov AGP norm squared at each dimension in krylov_dims
-  • The relative error |‖A_k‖² - ‖A_exact‖²| / ‖A_exact‖² at each k
-
-Parameters
-----------
-N           : chain length (N=7 recommended for χ=1e-5)
-χ           : imaginary boundary parameter (use small value, e.g. 1e-5)
-ξ_range     : (ξ_start, ξ_end), should straddle -1/2
-n_points    : number of ξ values in the scan
-krylov_dims : sorted vector of Krylov dimensions ≤ (2^N)², keep ≤ 100
-degen_tol   : near-degeneracy cutoff for exact AGP sum
-
-Returns a NamedTuple:
-  xi          : Vector{Float64}     ξ values
-  exact       : Vector{Float64}     exact ‖A_ξ‖²_F
-  krylov      : Dict{Int,Vector{Float64}}   Krylov ‖A_k‖²_F keyed by k
-  rel_error   : Dict{Int,Vector{Float64}}   relative error keyed by k
-  krylov_dims : Vector{Int}
-  phase       : Vector{String}      "B2" or "A2"
-  N           : Int
-  chi         : Float64
-
-Plotting example
-----------------
-    using Plots
-    results = scan_krylov_agp_norm(7, 1e-5)
-
-    # Norm comparison
-    p1 = plot(xlabel="ξ", ylabel="‖A_ξ‖²_F", yscale=:log10, legend=:topleft,
-              title="AGP norm: Krylov vs exact  (N=\$(results.N), χ=\$(results.chi))")
-    for k in results.krylov_dims
-        plot!(p1, results.xi, results.krylov[k], label="k=\$k", linestyle=:dash)
-    end
-    plot!(p1, results.xi, results.exact, label="Exact", lw=2, color=:black)
-    vline!(p1, [-0.5], linestyle=:dot, color=:red, label="ξ=-1/2")
-
-    # Relative error convergence
-    p2 = plot(xlabel="ξ", ylabel="relative error", yscale=:log10, legend=:topleft,
-              title="Krylov convergence")
-    for k in results.krylov_dims
-        plot!(p2, results.xi, results.rel_error[k], label="k=\$k")
-    end
-    vline!(p2, [-0.5], linestyle=:dot, color=:red, label="ξ=-1/2")
-"""
 function scan_krylov_agp_norm(N::Int, χ::Real;
                                ξ_range::Tuple{Real,Real} = (-0.9, -0.4),
                                n_points::Int             = 60,
-                               krylov_dims::Vector{Int}  = [5,17,39,199],
+                               krylov_dims::Vector{Int}  = [5,17,69,399],
                                degen_tol::Real           = 1e-8)
 
     @assert issorted(krylov_dims) "krylov_dims must be in ascending order"
@@ -158,9 +64,11 @@ function scan_krylov_agp_norm(N::Int, χ::Real;
 
     println("Scanning N=$N, χ=$χ,  ξ ∈ [$(ξ_range[1]), $(ξ_range[2])],  n_points=$n_points")
     println("Krylov dims: $krylov_dims")
+    println("Using $(Threads.nthreads()) thread(s)")
     println("─"^68)
 
-    for (i, ξ) in enumerate(ξ_vals)
+    for i in eachindex(ξ_vals)
+        ξ = ξ_vals[i]
 
         # ── Hamiltonian and derivative ────────────────────────────────────────
         H  = Matrix(PT_Heisenberg.build_hamiltonian(N, ξ, χ))
@@ -168,6 +76,13 @@ function scan_krylov_agp_norm(N::Int, χ::Real;
 
         # ── Exact norm ────────────────────────────────────────────────────────
         res          = AGP_Norm.agp_norm_exact(N, ξ, χ; param=:xi, degen_tol=degen_tol)
+
+    # for (i, ξ) in enumerate(ξ_vals)
+    #     n_up = PT_Heisenberg.ground_state_n_up(N, ξ)   # ← NEW (one line)
+    #     H  = Matrix(PT_Heisenberg.build_hamiltonian_sector(N, ξ, χ, n_up))  # ← changed
+    #     dH = Matrix(PT_Heisenberg.dH_dxi_sector(N, ξ, χ, n_up))            # ← changed
+    #     res = AGP_Norm.agp_norm_exact(N, ξ, χ;                              # ← add n_up=
+    #             param=:xi, degen_tol=degen_tol, n_up=n_up)
         exact_arr[i] = res.norm_sq
         phase_arr[i] = ξ < -0.5 ? "B2" : "A2"
 
@@ -204,12 +119,6 @@ end
 # Display
 # ─────────────────────────────────────────────────────────────────────────────
 
-"""
-    print_krylov_scan_table(results; n_show=20)
-
-Print a formatted table showing exact and Krylov norms, and relative
-errors, at evenly spaced ξ values across the scan.
-"""
 function print_krylov_scan_table(results; n_show::Int=20)
     n   = length(results.xi)
     idx = unique(round.(Int, range(1, n, length=min(n_show, n))))
